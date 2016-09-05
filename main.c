@@ -1,5 +1,6 @@
 
 #include "elf_reader.h"
+#include "list.h"
 
 static void write_fun_to_file(int fd, const char *symbol)
 {
@@ -10,7 +11,7 @@ static void write_fun_to_file(int fd, const char *symbol)
     write(fd, buff, strlen(buff));
 }
 
-static int create_wrap_file()
+static int create_wrap_file(list_node_t *functions_header)
 {
     int intpu_fd;
     int wrap_fd;
@@ -44,6 +45,13 @@ static int create_wrap_file()
     while (read (intpu_fd, &c, 1) != 0) {
         if (c == 0x0a) {
             write_fun_to_file (wrap_fd, symbol);
+            if (index == 0) {
+                memcpy(functions_header->s_name, symbol, 256);
+            } else {
+                list_node_t *node = calloc(sizeof(list_node_t), 1);
+                memcpy(node->s_name, symbol, 256);
+                list_insert(node, functions_header);
+            }
 
             bzero (symbol, 256);
             index = 0;
@@ -53,8 +61,33 @@ static int create_wrap_file()
     }
 
     close(wrap_fd);
+    close(intpu_fd);
+
+    return 0;
+
 out_close_input:
     close(intpu_fd);
+    return 1;
+}
+
+static int create_makefile(list_node_t *functions_header)
+{
+    FILE *makefile_file;
+    list_node_t *pos;
+
+    makefile_file = fopen("./makefile.wrap", "w+r");
+    if (makefile_file == NULL) {
+        perror("makefile.wrap open failed");
+        return 1;
+    }
+
+    list_for_each(pos, functions_header) {
+        list_node_t *func_node = pos;
+        fprintf(makefile_file, "-Wl,--wrap=%s\n", func_node->s_name);
+    }
+
+    fclose(makefile_file);
+
     return 0;
 }
 
@@ -62,17 +95,24 @@ int
 main(int argc, char const *argv[])
 {
     int ret;
+    list_node_t functions_header;
 
     if(argc < 2) {
         printf ("Usage: elf-parser <ELF-file>\n");
         return 0;
     }
 
+    list_init (&functions_header);
+
     ret = parse_elf_sym (argv[1]);
     if (ret != 0)
         return 1;
 
-    ret = create_wrap_file();
+    ret = create_wrap_file (&functions_header);
+    if (ret != 0)
+        return 1;
+
+    ret = create_makefile(&functions_header);
 
     return ret;
 }
