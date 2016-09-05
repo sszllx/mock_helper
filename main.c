@@ -60,8 +60,6 @@ create_wrap_file(list_node_t *functions_header,
                 continue;
             }
 
-            printf("symbol %s\n", symbol);
-
             write_fun_to_file (wrap_fd, symbol);
             if (index == 0) {
                 memcpy(functions_header->s_name, symbol, SYMBOL_LENGTH);
