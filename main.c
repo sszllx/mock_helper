@@ -1,21 +1,28 @@
 
+#include <unistd.h>
+
 #include "elf_reader.h"
 #include "list.h"
+
+extern char *optarg;
 
 static void write_fun_to_file(int fd, const char *symbol)
 {
     char buff[512];
     bzero (buff, 512);
 
-    snprintf(buff, 512, "void __wrap__%s () {\n__real_%s();\n}\n\n", symbol, symbol);
+    snprintf(buff, 512, "void __wrap_%s () {\n    __real_%s();\n}\n\n", symbol, symbol);
     write(fd, buff, strlen(buff));
 }
 
-static int create_wrap_file(list_node_t *functions_header)
+static int
+create_wrap_file(list_node_t *functions_header,
+    const char *filter,
+    const char *efilter)
 {
     int intpu_fd;
     int wrap_fd;
-    char symbol[256];
+    char symbol[SYMBOL_LENGTH];
 
     intpu_fd = open("./wrap_list", O_RDONLY, S_IRUSR);
     if (intpu_fd < 0) {
@@ -23,8 +30,8 @@ static int create_wrap_file(list_node_t *functions_header)
         return 1;
     }
 
-    char wrap_name[256];
-    bzero (wrap_name, 256);
+    char wrap_name[SYMBOL_LENGTH];
+    bzero (wrap_name, SYMBOL_LENGTH);
     printf ("input filename:");
     scanf ("%s", wrap_name);
 
@@ -39,21 +46,32 @@ static int create_wrap_file(list_node_t *functions_header)
         goto out_close_input;
     }
 
-    bzero (symbol, 256);
+    bzero (symbol, SYMBOL_LENGTH);
     char c;
     int index = 0;
     while (read (intpu_fd, &c, 1) != 0) {
         if (c == 0x0a) {
+            if ((filter != NULL &&
+                strstr(symbol, filter) == NULL) ||
+                (efilter != NULL &&
+                strstr(symbol, efilter) != NULL)) {
+                bzero (symbol, SYMBOL_LENGTH);
+                index = 0;
+                continue;
+            }
+
+            printf("symbol %s\n", symbol);
+
             write_fun_to_file (wrap_fd, symbol);
             if (index == 0) {
-                memcpy(functions_header->s_name, symbol, 256);
+                memcpy(functions_header->s_name, symbol, SYMBOL_LENGTH);
             } else {
                 list_node_t *node = calloc(sizeof(list_node_t), 1);
-                memcpy(node->s_name, symbol, 256);
+                memcpy(node->s_name, symbol, SYMBOL_LENGTH);
                 list_insert(node, functions_header);
             }
 
-            bzero (symbol, 256);
+            bzero (symbol, SYMBOL_LENGTH);
             index = 0;
             continue;
         }
@@ -92,23 +110,45 @@ static int create_makefile(list_node_t *functions_header)
 }
 
 int
-main(int argc, char const *argv[])
+main(int argc, char *const argv[])
 {
+    char opt;
     int ret;
+    const char *filter = NULL;
+    const char *efilter = NULL;
     list_node_t functions_header;
 
     if(argc < 2) {
-        printf ("Usage: elf-parser <ELF-file>\n");
-        return 0;
+        printf ("Usage: mock_helper elf_image [options] [file]\n \
+            parameters: \n \
+            -f 仅为包含有某字符串的函数生成wrap函数\n \
+            -e 不处理包含有某字符串的函数\n");
+        return 1;
+    }
+
+    while ((opt = getopt(argc, argv, "f:e:")) != EOF) {
+        switch (opt) {
+            case 'f':
+            filter = optarg;
+            printf("filter:%s\n", filter);
+            break;
+            case 'e':
+            efilter = optarg;
+            break;
+        }
+
     }
 
     list_init (&functions_header);
 
-    ret = parse_elf_sym (argv[1]);
+    ret = parse_elf_sym (argv[optind]);
     if (ret != 0)
         return 1;
 
-    ret = create_wrap_file (&functions_header);
+    printf("you can edit wrap_list file and then press 'enter'\n");
+    getchar();
+
+    ret = create_wrap_file (&functions_header, filter, efilter);
     if (ret != 0)
         return 1;
 

@@ -12,6 +12,8 @@
 
 #include <elf.h>
 
+#define SYMBOL_LENGTH 256
+
 int parse_elf_sym(const char *name);
 
 #endif // ELF_READER_H
