@@ -1,125 +1,78 @@
 
-// #define _LARGEFILE64_SOURCE
+#include "elf_reader.h"
 
-#include <stdio.h>
-#include <assert.h>
-#include <fcntl.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
-#include <errno.h>
-#include <stdbool.h>
-
-#include <elf.h>
-
-void read_elf_header(int fd, Elf64_Ehdr *elf_header)
+static void write_fun_to_file(int fd, const char *symbol)
 {
-    assert(elf_header != NULL);
-    assert(lseek(fd, (off_t)0, SEEK_SET) == (off_t)0);
-    assert(read(fd, (void *)elf_header, sizeof(Elf64_Ehdr)) == sizeof(Elf64_Ehdr));
+    char buff[512];
+    bzero (buff, 512);
+
+    snprintf(buff, 512, "void __wrap__%s () {\n__real_%s();\n}\n\n", symbol, symbol);
+    write(fd, buff, strlen(buff));
 }
 
-char * read_section(int32_t fd, Elf64_Shdr sh)
+static int create_wrap_file()
 {
-    char* buff = malloc(sh.sh_size);
-    if(!buff) {
-        printf("%s:Failed to allocate %ld bytes\n",
-            __func__, sh.sh_size);
+    int intpu_fd;
+    int wrap_fd;
+    char symbol[256];
+
+    intpu_fd = open("./wrap_list", O_RDONLY, S_IRUSR);
+    if (intpu_fd < 0) {
+        perror("wrap list open failed");
+        return 1;
     }
 
-    assert(buff != NULL);
-    assert(lseek(fd, (off_t)sh.sh_offset, SEEK_SET) == (off_t)sh.sh_offset);
-    assert(read(fd, (void *)buff, sh.sh_size) == sh.sh_size);
+    char wrap_name[256];
+    bzero (wrap_name, 256);
+    printf ("input filename:");
+    scanf ("%s", wrap_name);
 
-    return buff;
-}
-
-void iter_symbol_table(int fd,
-            Elf64_Ehdr eh,
-            Elf64_Shdr sh_table[],
-            uint32_t symbol_table)
-{
-
-    char *str_tbl;
-    Elf64_Sym* sym_tbl;
-    uint32_t i, symbol_count;
-
-    sym_tbl = (Elf64_Sym*)read_section(fd, sh_table[symbol_table]);
-
-    /* Read linked string-table
-     * Section containing the string table having names of
-     * symbols of this section
-     */
-    uint32_t str_tbl_ndx = sh_table[symbol_table].sh_link;
-    // debug("str_table_ndx = 0x%x\n", str_tbl_ndx);
-    str_tbl = read_section(fd, sh_table[str_tbl_ndx]);
-
-    symbol_count = (sh_table[symbol_table].sh_size/sizeof(Elf64_Sym));
-    printf("%d symbols\n", symbol_count);
-
-    for(i=0; i< symbol_count; i++) {
-        printf("0x%lx10x ", sym_tbl[i].st_value);
-        printf("0x%02x ", ELF64_ST_BIND(sym_tbl[i].st_info));
-        printf("0x%02x ", ELF64_ST_TYPE(sym_tbl[i].st_info));
-        printf("%d ", sym_tbl[i].st_shndx);
-        printf("%s\n", (str_tbl + sym_tbl[i].st_name));
+    if (wrap_name[0] == '\0') {
+        printf ("there is no input filename\n");
+        goto out_close_input;
     }
-}
 
-void iter_symbols(int fd, Elf64_Ehdr eh, Elf64_Shdr sh_table[])
-{
-    uint32_t i;
+    wrap_fd = open (wrap_name, O_WRONLY | O_CREAT, S_IWUSR | S_IRUSR);
+    if (wrap_fd < 0) {
+        perror ("create wrap file failed");
+        goto out_close_input;
+    }
 
-    for(i=0; i<eh.e_shnum; i++) {
-        if ((sh_table[i].sh_type==SHT_SYMTAB)
-         || (sh_table[i].sh_type==SHT_DYNSYM)) {
-            printf("\n[Section %03d]", i);
-            iter_symbol_table(fd, eh, sh_table, i);
+    bzero (symbol, 256);
+    char c;
+    int index = 0;
+    while (read (intpu_fd, &c, 1) != 0) {
+        if (c == 0x0a) {
+            write_fun_to_file (wrap_fd, symbol);
+
+            bzero (symbol, 256);
+            index = 0;
+            continue;
         }
-    }
-}
-
-void read_section_header_table(int32_t fd, Elf64_Ehdr eh, Elf64_Shdr sh_table[])
-{
-    uint32_t i;
-
-    assert(lseek(fd, (off_t)eh.e_shoff, SEEK_SET) == (off_t)eh.e_shoff);
-
-    for(i=0; i<eh.e_shnum; i++) {
-        assert(read(fd, (void *)&sh_table[i], eh.e_shentsize)
-             == eh.e_shentsize);
+        symbol[index++] = c;
     }
 
-}
-
-int main(int argc, char const *argv[])
-{
-    int fd;
-    Elf64_Ehdr eh;      /* elf-header is fixed size */
-    Elf64_Shdr* sh_tbl; /* section-header table is variable size */
-
-    if(argc!=2) {
-        printf("Usage: elf-parser <ELF-file>\n");
-        return 0;
-    }
-
-    fd = open(argv[1], O_RDONLY|O_SYNC);
-    if(fd<0) {
-        printf("Error %d Unable to open %s\n", fd, argv[1]);
-        return 0;
-    }
-
-    read_elf_header(fd, &eh);
-
-    sh_tbl = calloc(sizeof(Elf64_Shdr), eh.e_shentsize * eh.e_shnum);
-    if(!sh_tbl) {
-        printf("Failed to allocate %d bytes\n",
-            (eh.e_shentsize * eh.e_shnum));
-    }
-
-    read_section_header_table(fd, eh, sh_tbl);
-
-    iter_symbols(fd, eh, sh_tbl);
-
+    close(wrap_fd);
+out_close_input:
+    close(intpu_fd);
     return 0;
+}
+
+int
+main(int argc, char const *argv[])
+{
+    int ret;
+
+    if(argc < 2) {
+        printf ("Usage: elf-parser <ELF-file>\n");
+        return 0;
+    }
+
+    ret = parse_elf_sym (argv[1]);
+    if (ret != 0)
+        return 1;
+
+    ret = create_wrap_file();
+
+    return ret;
 }

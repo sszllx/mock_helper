@@ -87,3 +87,8 @@ ENV/
 
 # Rope project settings
 .ropeproject
+
+.tag*
+image
+mock_helper
+wrap_list
